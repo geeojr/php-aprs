@@ -1,8 +1,8 @@
 --
--- Database: `aprs-is`
+-- Database: `aprs_is`
 --
-CREATE DATABASE IF NOT EXISTS `aprs-is` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;
-USE `aprs-is`;
+CREATE DATABASE IF NOT EXISTS `aprs_is` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;
+USE `aprs_is`;
 
 -- --------------------------------------------------------
 

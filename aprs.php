@@ -1,4 +1,11 @@
 <?php
+/*
+	PHP-APRS
+	Copyright 2014
+	Jeremy R. Geeo <kd0eav@clear-sky.net>
+*/
+
+
 
 	class APRS
 	{
@@ -33,7 +40,7 @@
 		public function flushLog()
 		{
 			if ( $this->toLog === false ) return;
-			$fp = fopen( '/var/www/localhost/logs/aprs.log' , 'a+' );
+			$fp = fopen( dirname( __FILE__ ).'/aprs.log' , 'a+' );
 			if ( !is_resource( $fp ) ) return;
 			fwrite( $fp , $this->toLog );
 			fclose( $fp );
@@ -42,9 +49,99 @@
 
 		private function log( $method , $details )
 		{
+			if ( is_array($details) ) $details = var_export( $details , true );
+
 			$details = trim( $details );
 			$this->toLog.= strftime( '%Y-%m-%d %H:%M:%S' )." [$method] $details\n";
+			$this->flushLog();
 		}
+
+
+    public function connect()
+    {
+      $params = $this->getParams();
+
+      $socket = @ socket_create( AF_INET , SOCK_STREAM , SOL_TCP );
+      if ( $socket === false ) return "Can't create socket!";
+
+      $conn = @ socket_connect( $socket  , $params['server'] ,  $params['port'] );
+      if ( $conn === false ) return "Can't connect to server!";
+
+      $login = "user {$params['ssid']} pass {$params['pass']} vers {$params['version']} filter {$params['filter']}\n";
+      $this->log( __FUNCTION__ , "user {$params['ssid']} pass ****** vers {$params['version']} filter {$params['filter']}" );
+      $send = @ socket_send( $socket  , $login , strlen($login) , 0 );
+      if ( $send === false ) return "Can't send!";
+
+      $servers = array( $socket );
+      $last_tx = 0;
+
+      while ( true )
+      {
+        $read = $servers;
+        $wait = socket_select( $read , $write , $except , 5 );
+        if ( $wait === false )
+        {
+          echo "# socket_select() failed, reason: " . socket_strerror(socket_last_error()) . "\n";
+          break;
+        }
+
+        // Check for Self Transmit - can be important to keep filter functional;
+        // Also update Opts from DB on self-transmit to avoid restart
+        if ( $params['pos_int']>60 && time() - $last_tx > $params['pos_int'] )
+        {
+          $this->updateOpts();
+          $params = $this->getParams();
+          $last_tx = time();
+          $data = "{$params['ssid']}>{$params['software']},TCPIP*:={$params['lat']}".substr( $params['symbol'] , 0 , 1 )."{$params['lon']}".substr( $params['symbol'] , 1 , 1 )."{$params['comment']} \n";
+          $send = @ socket_send( $socket  , $data , strlen($data) , 0 );
+          if ( $send === false )
+          {
+						$this->log( __FUNCTION__ , "socket_send() failed: " . socket_strerror(socket_last_error()) );
+            echo "# socket_send() failed: " . socket_strerror(socket_last_error()) . "\n";
+            break;
+          }
+
+          $packet = $this->recvPacket( $data );
+        }
+
+        // Send Pending Messages
+
+        // Send Our Objects/Stations
+        $stns = $this->getMyObjects( $params['obj_int'] );
+        foreach( $stns as $data )
+        {
+          $send = @ socket_send( $socket  , $data , strlen($data) , 0 );
+          if ( $send === false )
+          {
+						$this->log( __FUNCTION__ , "socket_send() failed: " . socket_strerror(socket_last_error()) );
+            echo "# socket_send() failed: " . socket_strerror(socket_last_error()) . "\n";
+            break;
+          }
+
+          $packet = $this->recvPacket( $data );
+        }
+
+        if ( $wait < 1 ) continue;
+
+        foreach ( $read as $read_sock )
+        {
+          $recv = @ socket_read( $read_sock , 1024 );
+          if ( $recv === false )
+          {
+						$this->log( __FUNCTION__ , "socket_read() failed: " . socket_strerror(socket_last_error()) );
+            echo "# socket_read() failed: " . socket_strerror(socket_last_error()) . "\n";
+            break;
+          }
+          $packet = $this->recvPacket( $recv );
+        }
+      }
+
+      socket_close( $socket );
+      fclose( $fp );
+
+      return "Connection terminated";
+    }
+
 
 		public function updateOpts()
 		{
@@ -63,8 +160,8 @@
 				if ( mysql_ping( $this->db ) )
 					return $this->db;
 
-			if ( $this->db = mysql_connect( 'localhost' , 'aprs.is' , '' ) )
-				if ( mysql_select_db( 'aprs-is' , $this->db ) )
+			if ( $this->db = mysql_connect( 'localhost' , 'aprs_is' , '' ) )
+				if ( mysql_select_db( 'aprs_is' , $this->db ) )
 					return $this->db;
 
 			return false;
@@ -147,7 +244,7 @@
 			if ( $parse['capabilities'] != '' ) $sql.= "capabilities='{$parse['capabilities']}', ";
 			if ( $parse['comment'] != '' ) $sql.= "comment='".mysql_real_escape_string($parse['comment'])."', ";
 			$sql = substr( $sql , 0 , -2 )." WHERE ssid='$ssid' ";
-			//mysql_query( $sql , $db );
+			mysql_query( $sql , $db );
 
 			return $parse;
 		}
@@ -173,30 +270,6 @@
 				mysql_query( $sql , $db );
 			}
 			return $r;
-		}
-
-		public function getSSIDMap( $number )
-		{
-			$db = $this->getDB();
-			if ( $db === false ) return false;
-			$n = mysql_real_escape_string(trim($number));
-			$sql = "SELECT ssid FROM callsigns WHERE number_map='$n' ";
-			$res = mysql_query( $sql , $db );
-			if ( $row = mysql_fetch_assoc($res) )
-				return strtoupper($row['ssid']);
-			return false;
-		}
-
-		public function getNumberMap( $ssid )
-		{
-			$db = $this->getDB();
-			if ( $db === false ) return false;
-			$n = mysql_real_escape_string(trim($ssid));
-			$sql = "SELECT number_map FROM callsigns WHERE ssid='$n' ";
-			$res = mysql_query( $sql , $db );
-			if ( $row = mysql_fetch_assoc($res) )
-				return $row['number_map'];
-			return false;
 		}
 
 		//2013-07-24 02:24:46 [recvPacket] PY5VAN>APU25N,qAR,PY5YAM-1::PY5FOC   :ja  alterei por  aqui{81
@@ -294,10 +367,7 @@
 
 			$nl = strpos( $packet , "\n" );
 			if ( $nl !== false )
-			{
-				$this->log( __FUNCTION__ , "$packet" );
 				$packet = substr( $packet , 0 , $nl-1 );
-			}
 
 			$r['src'] = substr( $packet , 0 , strpos( $packet , '>' ) );
 			$packet = substr( $packet , strlen($r['src'])+1 );
@@ -525,6 +595,9 @@
 			$r['kill'] = $kill;
 
 			$r['remain'] = $packet;
+
+			$this->log( __FUNCTION__ , $r );
+
 			return $r;
 		}
 
