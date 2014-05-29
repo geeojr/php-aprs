@@ -14,8 +14,8 @@
 
 		private $toLog = false;
 
-		private $version = 'phpAPRS 0.02';
-		private $software = 'APH002';
+		private $version = 'phpAPRS 0.03';
+		private $software = 'APH003';
 		private $ssid = 'NOCALL';
 		private $pass = false;
 		private $server = 'rotate.aprs.net';
@@ -30,8 +30,8 @@
 
 		public function __construct()
 		{
-			$this->updateOpts();
 		}
+
 		function __destruct()
 		{
 			$this->flushLog();
@@ -104,7 +104,7 @@
           $packet = $this->recvPacket( $data );
         }
 
-        // Send Pending Messages
+        // TODO: Send Pending Messages
 
         // Send Our Objects/Stations
         $stns = $this->getMyObjects( $params['obj_int'] );
@@ -347,7 +347,7 @@
 			return "{$deg}{$dec}";
 		}
 
-		private function parsePacket( $packet )
+		public function parsePacket( $packet )
 		{
 			if ( substr( $packet , 0 , 1 ) == '#' ) return false;
 
@@ -364,6 +364,10 @@
 			$status = false;
 			$capabilities = false;
 			$kill = false;
+			$alt = false;
+			$course = false;
+			$speed = false;
+			$telem = false;
 
 			$nl = strpos( $packet , "\n" );
 			if ( $nl !== false )
@@ -477,6 +481,14 @@
 					$lon= -180 + ( (ord($clon[0])-33)*pow(91,3) + (ord($clon[1])-33)*pow(91,2) + (ord($clon[2])-33)*91 + ord($clon[3])-33 ) / 190463;
 
 					$symbol = substr( $packet , 0 , 1 ).substr( $packet , 9 , 1 );
+
+					$cs = substr( $packet , 10 , 2 );
+					if ( substr( $cs , 0 , 1 ) != ' ' )
+					{
+						// TODO: figure out course/speed or alt or range
+						$ctype = substr( $packet , 12 , 1 );
+
+					}
 					$comment = substr( $packet , 13 );
 				}
 			}
@@ -593,6 +605,10 @@
 			$r['status'] = trim( $status );
 			$r['capabilities'] = trim( $capabilities );
 			$r['kill'] = $kill;
+			$r['alt'] = $alt;
+			$r['course'] = $course;
+			$r['speed'] = $speed;
+			$r['telem'] = $telem;
 
 			$r['remain'] = $packet;
 
