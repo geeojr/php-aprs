@@ -480,12 +480,19 @@
 					$clon = substr( $packet , 5 , 4 );
 					$lon= -180 + ( (ord($clon[0])-33)*pow(91,3) + (ord($clon[1])-33)*pow(91,2) + (ord($clon[2])-33)*91 + ord($clon[3])-33 ) / 190463;
 
+					// check if we have sane values
+					if ( abs($lon) > 180 || abs($lat) > 90 )
+					{
+						$lon = false;
+						$lat = false;
+					}
+
 					$symbol = substr( $packet , 0 , 1 ).substr( $packet , 9 , 1 );
 
 					$cs = substr( $packet , 10 , 2 );
 					if ( substr( $cs , 0 , 1 ) != ' ' )
 					{
-						// TODO: figure out course/speed or alt or range
+						// TODO: figure out cOMPRessed course/speed or alt or range
 						$ctype = substr( $packet , 12 , 1 );
 
 					}
@@ -581,6 +588,34 @@
 
 				$symbol = substr( $packet , 7 , 1 ).substr( $packet , 6 , 1 );
 				$comment = substr( $packet , 8 );
+			}
+
+			// check if we have course/speed data
+			if ( substr( $comment , 3 , 1 ) == '/' )
+			{
+				$course = intval(substr( $comment , 0 , 3 ));
+				if ( $course > 360 ) $course = false;
+
+				$speed = substr( $comment , 4 , 3 ) * 1.152; //knots to Mph
+			}
+
+			if ( strpos( $comment , '/A=' ) !== false )
+			{
+				$alt = intval(substr( $comment , strpos( $comment , '/A=' )+3,6));
+				//$comment = substr( $packet , 8 , strpos( $comment , '/A=' ) ) . substr( $packet , strpos( $comment , '/A=' )+22 );
+				if ( $alt == 0 ) $alt = false;
+			}
+
+			// http://he.fi/doc/aprs-base91-comment-telemetry.txt
+			if ( strpos( $comment , '|' ) !== false )
+			{
+				$telem_string = substr( $comment , strpos( $comment , '|' ) + 1 , strrpos( $comment , '|' )-1 );
+
+				for( $i=0 ; $i < strlen( $telem_string )/2 ; $i++ )
+				{
+					$telem[] = (ord($telem_string[$i*2])-33)*pow(91,1) + (ord($telem_string[($i*2)+1])-33);
+				}
+				//$comment = '';
 			}
 
 			if ( $t == 'status' )
@@ -689,6 +724,99 @@
 
 			return $r;
 		}
+
+		//                                            in hours        in hours
+		public function getPositHistory( $callsign , $duration = 1 , $history_start = 48 )
+		{
+			$md5 = md5( strftime('%Y-%m-%d')."$callsign $duration $history_start" );
+			$c = trim($callsign);
+
+			$d = intval( $duration );
+			if ( $d < 1 || $d > 24 ) $d = 1;
+
+			$h = intval( $history_start );
+			if ( $h < 1 || $h > 72 ) $d = 72;
+
+			// check if we already have a recent version of this request
+			if ( file_exists( $md5 ) )
+			{
+				$data = file_get_contents( $md5 );
+			} else {
+				$ch = curl_init();
+				curl_setopt( $ch, CURLOPT_URL, "http://www.findu.com/cgi-bin/rawposit.cgi?call=$c&time=$d&start=$h&comma=1" );
+				curl_setopt( $ch, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1" );
+				curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt( $ch, CURLOPT_BINARYTRANSFER, true);
+				$data = curl_exec($ch);
+				file_put_contents( $md5 , $data );
+			}
+			$patterns = array( '/<TITLE>.*<\/TITLE>/' , '/<[^>]*>/' , '/&nbsp;/' );
+			$data = preg_replace( $patterns , '' , $data );
+			$data = preg_replace( "/(^[\r\n]*|[\r\n]+)[\s\t]*[\r\n]+/" , "\n" , $data );
+
+			$lines = explode( "\n" , $data );
+			foreach( $lines as $line )
+			{
+				if ( trim($line) == '' ) continue;
+
+				$p = $this->parsePacket( substr( $line , strpos( $line , ',' )+1 ) );
+				if ( $p === false ) continue;
+				$p['timestamp'] = mktime(substr($line,8,2),substr($line,10,2),substr($line,12,2),substr($line,4,2),substr($line,6,2),substr($line,0,4));
+
+				// if we're working with telemetry then make sure we're not out of order
+				if ( is_array( $last['telem'] ) && is_array( $p['telem'] ) )
+					if ( $last['telem'][0] >= $p['telem'][0] )
+						continue;
+
+				// guess on speed/course based on recent packet
+				if ( $last && $p['speed'] === false && $p['lat'] !== false && $p['lon'] !== false )
+				{
+					$time = $p['timestamp'] - $last['timestamp'];
+					$dist = $this->distance( $last['lat'] , $last['lon'] , $p['lat'] , $p['lon'] );
+					$p['speed'] = (3600/$time) * $dist;
+					$p['course'] = $this->bearing( $last['lat'] , $last['lon'] , $p['lat'] , $p['lon'] );
+					if ( $p['speed'] > 500 )
+					{
+						$p['speed'] = false;
+						$p['course'] = false;
+						$p['lat'] = false;
+						$p['lon'] = false;
+					}
+					if ( $p['speed'] == 0 ) $p['course'] = false;
+				}
+
+				$r[] = $p;
+
+				// only store last position if we actually had one
+				if ( $p['lat'] !== false && $p['lon'] !== false )
+					$last = $p;
+			}
+			return $r;
+		}
+
+		function distance($lat1, $lon1, $lat2, $lon2)
+		{
+			$theta = $lon1 - $lon2;
+			$dist = sin(deg2rad($lat1)) * sin(deg2rad($lat2)) +  cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * cos(deg2rad($theta));
+			$dist = acos($dist);
+			$dist = rad2deg($dist);
+			return $miles = $dist * 60 * 1.1515;
+		}
+
+		function bearing($lat1, $lon1, $lat2, $lon2)
+		{
+     $dLon = deg2rad($lon2) - deg2rad($lon1);
+     $dPhi = log(tan(deg2rad($lat2) / 2 + pi() / 4) / tan(deg2rad($lat1) / 2 + pi() / 4));
+     if(abs($dLon) > pi()) {
+          if($dLon > 0) {
+               $dLon = (2 * pi() - $dLon) * -1;
+          } else {
+               $dLon = 2 * pi() + $dLon;
+          }
+			}
+			return (rad2deg(atan2($dLon, $dPhi)) + 360) % 360;
+		}
+
 
 	}
 
