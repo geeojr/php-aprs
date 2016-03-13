@@ -11,11 +11,15 @@
 	{
 
 		private $db = false;
+		private $db_host = 'localhost';
+		private $db_user = '';
+		private $db_pass = '';
+		private $db_name = 'aprs_is';
 
 		private $toLog = false;
 
-		private $version = 'phpAPRS 0.03';
-		private $software = 'APH003';
+		private $version = 'phpAPRS 0.04';
+		private $software = 'APH004';
 		private $ssid = 'NOCALL';
 		private $pass = false;
 		private $server = 'rotate.aprs.net';
@@ -28,8 +32,25 @@
 		private $pos_int = 1800;
 		private $obj_int = 600;
 
-		public function __construct()
+		public function __construct( $db_host , $db_user , $db_pass , $db_name )
 		{
+			$this->db_host = $db_host;
+			$this->db_user = $db_user;
+			$this->db_pass = $db_pass;
+			$this->db_name = $db_name;
+		}
+		
+		private function getDB()
+		{
+			if ( $this->db )
+				if ( mysql_ping( $this->db ) )
+					return $this->db;
+
+			if ( $this->db = mysql_connect( $this->db_host , $this->db_user , $this->db_pass ) )
+				if ( mysql_select_db( $this->db_name , $this->db ) )
+					return $this->db;
+
+			return false;
 		}
 
 		function __destruct()
@@ -152,19 +173,6 @@
 			$res = mysql_query( $sql , $db );
 			while( $row = mysql_fetch_assoc( $res ) )
 				$this->$row['key'] = $row['value'];
-		}
-
-		private function getDB()
-		{
-			if ( $this->db )
-				if ( mysql_ping( $this->db ) )
-					return $this->db;
-
-			if ( $this->db = mysql_connect( 'localhost' , 'aprs_is' , '' ) )
-				if ( mysql_select_db( 'aprs_is' , $this->db ) )
-					return $this->db;
-
-			return false;
 		}
 
 		public function getParams()
