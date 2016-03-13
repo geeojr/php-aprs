@@ -221,6 +221,7 @@
 		public function recvPacket( $packet )
 		{
 			$this->log( __FUNCTION__ , $packet );
+			echo $packet;
 
 			$db = $this->getDB();
 			if ( $db === false ) return false;
