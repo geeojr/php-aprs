@@ -9,6 +9,8 @@
 	date_default_timezone_set("US/Central");
 
 	require_once( 'aprs.php' );
-	$aprs = new APRS();
+
+	$aprs = new APRS( 'localhost' , 'aprsis' , 'somepassword' , 'aprs-is' );
+	$aprs->updateOpts();
 	$aprs->connect();
 ?>
